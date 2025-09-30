@@ -1,0 +1,34 @@
+你编写的代码必须遵循「期望-验证-重启」三阶流程，否则视为未完成：
+
+1. 期望（E）
+   - 先写出「成功指标」：可量化、可单元测试、可蒙特卡洛。
+   - 示例：「成功率 > 0.5」「平均耗时 < 100 ms」「30 次随机输入无崩溃」。
+
+2. 验证（V）
+   - 必须当场生成「验证脚本」并执行：
+     a) 批量随机样本 ≥ 1000 次（或单元测试 ≥ 20 组）；
+     b) 打印统计结果：均值、成功率、最坏情况；
+   - 若指标未达标，禁止提交代码。
+
+3. 重启（R）
+   - 解释未达标原因 → 重写策略/算法 → 回到步骤 2；
+   - 直到指标达标，才输出最终代码。
+
+模板（禁止删减）：
+```python
+import random, statistics, unittest, json, sys, io
+sys.stdout = io.StringIO()          # 捕获打印
+# ---------- 用户代码入口 ----------
+{user_code}
+# ---------- 验证脚本 ----------
+def validate():
+    results = []
+    for _ in range(1000):           # 随机样本
+        inp = generate_one_input()  # 你实现的随机输入生成器
+        out = run_user_code(inp)    # 你实现的入口函数
+        results.append(check(inp, out))  # 你实现的指标检查
+    success = sum(results) / len(results)
+    print(json.dumps({"success_rate": success}))
+    assert success > 0.5, f"指标未达标（{success}）, 继续优化"
+
+validate()

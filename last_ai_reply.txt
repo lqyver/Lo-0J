@@ -1,0 +1,118 @@
+----- main.py -----
+a, b = 3, 4
+c = a & b
+d = a ^ b
+e = (a & (~b)) + (b & (~a))
+print(e)
+----- run_and_fix.py -----
+#!/usr/bin/env python3
+import json, re, subprocess, requests, sys
+from pathlib import Path
+
+# ========== 用户只改这里 ==========
+ENTRY_FILE = Path("C:/Users/leo/Desktop/za/work/2025/mini mini/ai/2.0/main.py")
+SOURCE_DIR = Path("C:/Users/leo/Desktop/za/work/2025/mini mini/ai/2.0")
+
+REQ_FILE = Path("requirements.md")
+MODEL = "qwen2.5-coder:7b"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+MAX_ROUND = 5
+
+def read(f: Path) -> str: return f.read_text(encoding="utf8")
+def write(f: Path, s: str): f.write_text(s, encoding="utf8")
+
+req = read(REQ_FILE) if REQ_FILE.exists() else ""
+
+# ① 加载整棵源码树（相对路径 → 内容）
+code_tree = {str(p.relative_to(SOURCE_DIR)): read(p)
+             for p in SOURCE_DIR.rglob("*.py")}
+
+# ② 运行入口文件
+def run():
+    r = subprocess.run([sys.executable, str(ENTRY_FILE)],
+                       capture_output=True, text=True, cwd=SOURCE_DIR.parent)
+    return r.returncode == 0, r.stdout + r.stderr
+
+# ③ AI 需求校验
+def check_output(stdout: str):
+    sys_msg = (
+        "你是需求检查官。请严格对照用户需求检查下列两项："
+        "1) 输出结果正确；2) 实现过程完全符合需求（如禁用+、使用位运算等）。"
+        "先简要分析，最后一行只写 True 或 False，不要写代码。"
+    )
+    user = (
+        f"用户需求：\\n{req}\\n\\n"
+        f"当前源码：\\n{json.dumps(code_tree, ensure_ascii=False)}\\n\\n"
+        f"实际输出：\\n{stdout}"
+    )
+    payload = {"model": MODEL, "messages": [
+        {"role": "system", "content": sys_msg},
+        {"role": "user", "content": user}
+    ], "stream": False}
+    resp = requests.post(OLLAMA_URL, json=payload, timeout=60).json()["message"]["content"].strip()
+    # 取最后一行 True/False
+    last_line = resp.splitlines()[-1].strip()
+    if last_line == "True":
+        return True, ""
+    return False, resp
+
+# ④ 合并判断：异常 OR 需求不符 → 都算失败
+def run_and_check():
+    ok, log = run()
+    if not ok:
+        return False, log                       # 有异常
+    fine, reason = check_output(log)          # log 即 stdout
+    if not fine:
+        return False, f"输出不符合需求：{reason}\\n---- 实际输出 ----\\n{log}"
+    return True, log
+
+# ⑤ AI 修复整树
+def fix(log: str):
+    sys_msg = (
+        "你是资深 Python 开发，必须同时满足："
+        "1) 用户需求；2) 运行无异常且输出正确。"
+        "禁止解释，直接返回完整文件内容，格式：\\n"
+        "----- 相对路径/文件名 -----\\n<代码>"
+    )
+    user = f"需求：\\n{req}\\n\\n运行日志：\\n{log}\\n\\n源码树：\\n{json.dumps(code_tree, ensure_ascii=False)}"
+    payload = {"model": MODEL, "messages": [
+        {"role": "system", "content": sys_msg},
+        {"role": "user", "content": user}
+    ], "stream": False}
+    out = requests.post(OLLAMA_URL, json=payload, timeout=300).json()["message"]["content"]
+
+    # ① 先留痕，方便调试
+    Path("last_ai_reply.txt").write_text(out, encoding="utf8")
+
+    # ② 安全解析
+    for name in re.findall(r"----- (\S+) -----", out):
+        m = re.search(rf"----- {name} -----\\s+(.*?)\\s+(?=-----|$)", out, re.S)
+        if not m:
+            print(f"⚠️ 未提取到 {name} 的代码块")
+            continue
+        code = m.group(1)
+        target = SOURCE_DIR / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write(target, code)
+        print("📝 覆盖 →", target)
+
+    # ③ 刷新内存
+    code_tree.update({str(p.relative_to(SOURCE_DIR)): read(p)
+                      for p in SOURCE_DIR.rglob("*.py")})
+
+# ⑥ 主循环
+def main():
+    for i in range(1, MAX_ROUND + 1):
+        print(f"\n===== 第 {i} 次运行 =====")
+        ok, log = run_and_check()
+        print(log)
+        if ok:
+            print("✅ 运行成功且符合需求")
+            break
+        print("❌ 失败，正在修复...")
+        fix(log)
+    else:
+        print("⚠️ 已达最大迭代，请检查需求或日志")
+
+if __name__ == "__main__":
+    main()
